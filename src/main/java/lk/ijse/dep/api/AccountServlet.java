@@ -15,6 +15,7 @@ import javax.sql.DataSource;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.UUID;
 
@@ -44,10 +45,10 @@ public class AccountServlet extends HttpServlet {
 
     }
 
-    private void createAccount(AccountDTO accountDTO, HttpServletResponse resp) {
+    private void createAccount(AccountDTO accountDTO, HttpServletResponse resp) throws IOException {
 
         try(Connection connection = pool.getConnection()){
-            if(accountDTO.getName() == null || accountDTO.getName().matches("[A-Za-z ]+")){
+            if(accountDTO.getName() == null || !accountDTO.getName().matches("[A-Za-z ]+")){
                 throw new JsonException("Invalid account holder address");
             }else if (accountDTO.getAddress() == null || accountDTO.getAddress().isBlank()){
                 throw new JsonException("Invalid account holder address");
@@ -56,10 +57,22 @@ public class AccountServlet extends HttpServlet {
             accountDTO.setAccountNumber(UUID.randomUUID().toString());
             accountDTO.setBalance(BigDecimal.ZERO);
 
+            PreparedStatement stm = connection.prepareStatement("INSERT INTO Account (account_number, holder_name, holder_address) VALUES (?,?,?)");
+            stm.setString(1,accountDTO.getAccountNumber());
+            stm.setString(2,accountDTO.getName());
+            stm.setString(3,accountDTO.getAddress());
 
+            if (stm.executeUpdate() ==1 ){
+                resp.setStatus(HttpServletResponse.SC_CREATED);
+                resp.setContentType("application/json");
+                JsonbBuilder.create().toJson(accountDTO,resp.getWriter());
+            }else {
+                throw new SQLException("Something went wrong, try again");
+            }
 
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            e.printStackTrace();
+          resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
 
     }
