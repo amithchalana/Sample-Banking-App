@@ -13,7 +13,7 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 
 public class AccountDTO implements Serializable {
-    private String account;
+    private String accountNumber;
     private String name;
     private String address;
     private BigDecimal balance;
