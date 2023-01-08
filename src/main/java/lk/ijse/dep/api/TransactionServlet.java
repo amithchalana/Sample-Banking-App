@@ -145,7 +145,107 @@ public class TransactionServlet extends HttpServlet {
 
     }
 
-    private void transferMoney(TransferDTO transferDTO, HttpServletResponse resp) {
+    private void transferMoney(TransferDTO transferDTO, HttpServletResponse resp) throws IOException {
+        try {
+
+            if (transferDTO.getFrom() == null ||
+                    !transferDTO.getFrom().matches("[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}")) {
+                throw new JsonException("Invalid from account number");
+            } else if (transferDTO.getTo() == null ||
+                    !transferDTO.getTo().matches("[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}")) {
+                throw new JsonException("Invalid to account number");
+            } else if (transferDTO.getAmount() == null ||
+                    transferDTO.getAmount().compareTo(new BigDecimal(100)) < 0) {
+                throw new JsonException("Invalid amount");
+            }
+
+
+            Connection connection = pool.getConnection();
+
+            PreparedStatement stm1 = connection.
+                    prepareStatement("SELECT * FROM Account WHERE account_number = ?");
+            stm1.setString(1, transferDTO.getTo());
+            ResultSet rst1 = stm1.executeQuery();
+            if (!rst1.next()) {
+                throw new JsonException("Invalid to account number");
+            }
+
+            PreparedStatement stm2 = connection.
+                    prepareStatement("SELECT * FROM Account WHERE account_number = ?");
+            stm2.setString(1, transferDTO.getFrom());
+            ResultSet rst2;
+            synchronized (this) {
+                rst2 = stm2.executeQuery();
+            }
+            if (!rst2.next()) {
+                throw new JsonException("Invalid from account number");
+            }
+
+            BigDecimal toAccountBalance = rst1.getBigDecimal("balance");
+            BigDecimal fromAccountBalance = rst2.getBigDecimal("balance");
+            if (fromAccountBalance.subtract(transferDTO.getAmount()).compareTo(new BigDecimal(100)) < 0){
+                throw new JsonException("Insufficient account balance");
+            }
+
+            try{
+                connection.setAutoCommit(false);
+
+                PreparedStatement stmWithdraw = connection
+                        .prepareStatement("UPDATE  Account SET balance = ? WHERE account_number = ?");
+                stmWithdraw.setBigDecimal(1, fromAccountBalance.subtract(transferDTO.getAmount()));
+                stmWithdraw.setString(2, transferDTO.getFrom());
+                if (stmWithdraw.executeUpdate() != 1) throw new SQLException("Failed to update the balance of the from account");
+
+                PreparedStatement stmNewTransaction = connection.prepareStatement
+                        ("INSERT INTO Transaction (account, type, description, amount, date) VALUES (?, ?, ?, ?, ?)");
+                stmNewTransaction.setString(1, transferDTO.getFrom());
+                stmNewTransaction.setString(2, "DEBIT");
+                stmNewTransaction.setString(3, "Transfer");
+                stmNewTransaction.setBigDecimal(4, transferDTO.getAmount());
+                stmNewTransaction.setTimestamp(5, new Timestamp(new Date().getTime()));
+                if (stmNewTransaction.executeUpdate() != 1) throw new SQLException("Failed to add the debit transaction record");
+
+                PreparedStatement stmDeposit = connection
+                        .prepareStatement("UPDATE  Account SET balance = ? WHERE account_number = ?");
+                stmDeposit.setBigDecimal(1, toAccountBalance.add(transferDTO.getAmount()));
+                stmDeposit.setString(2, transferDTO.getTo());
+                if (stmDeposit.executeUpdate() != 1) throw new SQLException("Failed to update the balance");
+
+                stmNewTransaction = connection.prepareStatement
+                        ("INSERT INTO Transaction (account, type, description, amount, date) VALUES (?, ?, ?, ?, ?)");
+                stmNewTransaction.setString(1, transferDTO.getTo());
+                stmNewTransaction.setString(2, "CREDIT");
+                stmNewTransaction.setString(3, "Transfer");
+                stmNewTransaction.setBigDecimal(4, transferDTO.getAmount());
+                stmNewTransaction.setTimestamp(5, new Timestamp(new Date().getTime()));
+                if (stmNewTransaction.executeUpdate() != 1) throw new SQLException("Failed to add the credit transaction record");
+
+                connection.commit();
+
+                ResultSet resultSet = stm2.executeQuery();
+                resultSet.next();
+                String name = resultSet.getString("holder_name");
+                String address = resultSet.getString("holder_address");
+                BigDecimal balance = resultSet.getBigDecimal("balance");
+                AccountDTO accountDTO = new AccountDTO(transferDTO.getFrom(), name, address, balance);
+
+                resp.setStatus(HttpServletResponse.SC_CREATED);
+                resp.setContentType("application/json");
+                JsonbBuilder.create().toJson(accountDTO, resp.getWriter());
+            }catch (Throwable t){
+                connection.rollback();
+                t.printStackTrace();
+                resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to transfer the money, contact the bank");
+            }finally{
+                connection.setAutoCommit(true);
+            }
+            connection.close();
+        }catch (JsonException  e){
+            resp.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (SQLException e) {
+            e.printStackTrace();
+            resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to transfer, contact the bank");
+        }
 
 
     }
