@@ -66,7 +66,80 @@ public class TransactionServlet extends HttpServlet {
         }
     }
 
-    private void withdrawMoney(TransactionDTO transactionDTO, HttpServletResponse resp) {
+    private void withdrawMoney(TransactionDTO transactionDTO, HttpServletResponse resp) throws IOException  {
+        try{
+
+
+            if (transactionDTO.getAccount() == null ||
+                    !transactionDTO.getAccount().matches("[A-Fa-f0-9]{8}(-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}")){
+                throw new JsonException("Invalid account number");
+            }else if (transactionDTO.getAmount() == null ||
+                    transactionDTO.getAmount().compareTo(new BigDecimal(100)) < 0) {
+                throw new JsonException("Invalid amount");
+            }
+
+
+            Connection connection = pool.getConnection();
+            PreparedStatement stm = connection.
+                    prepareStatement("SELECT * FROM Account WHERE account_number = ?");
+            stm.setString(1, transactionDTO.getAccount());
+            ResultSet rst = stm.executeQuery();
+            if (!rst.next()){
+                throw new JsonException("Invalid account number");
+            }
+
+            BigDecimal currentBalance = rst.getBigDecimal("balance");
+            if (currentBalance.subtract(transactionDTO.getAmount()).compareTo(new BigDecimal(100)) < 0){
+                throw new JsonException("Insufficient account balance");
+            }
+
+            try{
+                connection.setAutoCommit(false);
+                synchronized (this) {
+                    PreparedStatement stmUpdate = connection
+                            .prepareStatement("UPDATE  Account SET balance = balance - ? WHERE account_number = ?");
+                    stmUpdate.setBigDecimal(1, transactionDTO.getAmount());
+                    stmUpdate.setString(2, transactionDTO.getAccount());
+                    if (stmUpdate.executeUpdate() != 1) throw new SQLException("Failed to update the balance");
+
+                    PreparedStatement stmNewTransaction = connection.prepareStatement
+                            ("INSERT INTO Transaction (account, type, description, amount, date) VALUES (?, ?, ?, ?, ?)");
+                    stmNewTransaction.setString(1, transactionDTO.getAccount());
+                    stmNewTransaction.setString(2, "DEBIT");
+                    stmNewTransaction.setString(3, "Withdraw");
+                    stmNewTransaction.setBigDecimal(4, transactionDTO.getAmount());
+                    stmNewTransaction.setTimestamp(5, new Timestamp(new Date().getTime()));
+                    if (stmNewTransaction.executeUpdate() != 1)
+                        throw new SQLException("Failed to add the debit transaction record");
+
+                    Thread.sleep(8000);
+                    connection.commit();
+                }
+                ResultSet resultSet = stm.executeQuery();
+
+                resultSet.next();
+                String name = resultSet.getString("holder_name");
+                String address = resultSet.getString("holder_address");
+                BigDecimal balance = resultSet.getBigDecimal("balance");
+                AccountDTO accountDTO = new AccountDTO(transactionDTO.getAccount(), name, address, balance);
+
+                resp.setStatus(HttpServletResponse.SC_CREATED);
+                resp.setContentType("application/json");
+                JsonbBuilder.create().toJson(accountDTO, resp.getWriter());
+            }catch (Throwable t){
+                connection.rollback();
+                t.printStackTrace();
+                resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to withdraw the money, contact the bank");
+            }finally{
+                connection.setAutoCommit(true);
+            }
+            connection.close();
+        }catch (JsonException  e){
+            resp.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+        } catch (SQLException e) {
+            e.printStackTrace();
+            resp.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Failed to withdraw, contact the bank");
+        }
 
 
 
