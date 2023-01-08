@@ -7,7 +7,7 @@
     <groupId>lk.ijse.dep</groupId>
     <artifactId>Banking-App</artifactId>
     <version>1.0.0</version>
-    <name>Banking-App</name>
+    <name>sample-banking-app</name>
     <packaging>war</packaging>
 
     <properties>
